@@ -336,11 +336,36 @@
     readerScrollWrap.addEventListener('scroll', updateProgress, { passive: true });
   }
 
+  /* ---------------- GUARANTEED VISIBILITY for landing fade-ins ---------------- */
+  function ensureLandingVisible() {
+    const fadeEls = document.querySelectorAll('#screen-landing .fade-in');
+
+    // Mark done on animationend
+    fadeEls.forEach(el => {
+      el.addEventListener('animationend', () => {
+        el.classList.add('anim-done');
+      }, { once: true });
+    });
+
+    // Hard fallback: force visible after 2.5s regardless (handles mobile skip)
+    setTimeout(() => {
+      fadeEls.forEach(el => el.classList.add('anim-done'));
+
+      // Activate shimmer on title AFTER it is visible
+      const titleEl = document.querySelector('.book-title');
+      if (titleEl) titleEl.classList.add('shimmer-active');
+
+      // Activate pulse on button AFTER it is visible
+      const btnEl = document.getElementById('btn-read-book');
+      if (btnEl) btnEl.classList.add('pulse-active');
+    }, 2500);
+  }
+
   /* ---------------- INIT — runs after DOM is ready ---------------- */
   function init() {
     cacheDom();
 
-    // Restore saved language (FIX: set default before first render)
+    // Restore saved language
     let saved = null;
     try { saved = localStorage.getItem('lang'); } catch(e) {}
     currentLanguage = saved || 'hinglish';
@@ -354,10 +379,11 @@
 
     bindEvents();
     initCursorGlow();
+    ensureLandingVisible();
     goToScreen('landing');
   }
 
-  // FIX: Run init directly — DOM is already parsed when script is at bottom of body
+  // Run init directly — DOM already parsed when script is at bottom of body
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
