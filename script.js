@@ -1,13 +1,14 @@
 /* =========================================================
-   खार्कहोदा का मॉनिटर — script.js
-   Screen navigation + language state + chapter rendering
+   खार्कहोदा का मॉनिटर — script.js v2
+   Fixes: DOMContentLoaded race, btnChangeLang span check,
+          reader scroll, progress bar, ripple, stagger cards
    ========================================================= */
 
 (() => {
   'use strict';
 
   /* ---------------- STATE ---------------- */
-  let currentLanguage = localStorage.getItem('lang') || null;
+  let currentLanguage = null;
   let currentScreen   = 'landing';
   let currentChapterIndex = 0;
 
@@ -24,7 +25,7 @@
     hindi: {
       chaptersTitle: 'अध्याय',
       chaptersSubtitle: 'पढ़ने के लिए एक अध्याय चुनें',
-      back: 'अध्याय सूची पर वापस जाएँ',
+      back: 'अध्याय सूची पर वापस',
       changeLang: 'भाषा बदलें',
       prev: '← पिछला',
       next: 'अगला →'
@@ -40,19 +41,14 @@
     punjabi: {
       chaptersTitle: 'ਅਧਿਆਏ',
       chaptersSubtitle: 'ਪੜ੍ਹਨ ਲਈ ਇੱਕ ਅਧਿਆਏ ਚੁਣੋ',
-      back: 'ਅਧਿਆਏ ਸੂਚੀ \'ਤੇ ਵਾਪਸ ਜਾਓ',
+      back: 'ਅਧਿਆਏ ਸੂਚੀ \'ਤੇ ਵਾਪਸ',
       changeLang: 'ਭਾਸ਼ਾ ਬਦਲੋ',
       prev: '← ਪਿਛਲਾ',
       next: 'ਅਗਲਾ →'
     }
   };
 
-  /* ---------------- CHAPTER DATA ----------------
-     Replace the placeholder "text" arrays with your real
-     autobiography content. Each chapter has a title +
-     short excerpt (for the card) + full text (array of
-     paragraphs) per language.
-  ---------------------------------------------------- */
+  /* ---------------- CHAPTER DATA ---------------- */
   const CHAPTERS = {
     hinglish: [
       { title: 'Shuruaat', excerpt: 'Kharkhoda ke gaon se shuru hoti hai yeh kahani...', text: ['Yeh kahani shuru hoti hai Kharkhoda ke ek chhote se gaon se, jahan dhool bhari galiyon mein bachpan beeta...', 'Har subah suraj ki pehli kiran ke saath gaon jag jaata tha, aur usi mein chhupi thi meri zindagi ki pehli yaadein.'] },
@@ -96,59 +92,88 @@
     ]
   };
 
-  /* ---------------- DOM REFS ---------------- */
-  const screens = {
-    landing: document.getElementById('screen-landing'),
-    language: document.getElementById('screen-language'),
-    chapters: document.getElementById('screen-chapters'),
-    reader: document.getElementById('screen-reader')
-  };
+  /* ---------------- DOM REFS — safe, called after DOMContentLoaded ---------------- */
+  let screens, btnReadBook, langCards, btnChangeLang, chapterListEl,
+      chaptersTitleEl, chaptersSubtitleEl, btnBackChapters, langDropdown,
+      readerLabel, readerTitle, readerText, btnPrevChapter, btnNextChapter,
+      readerScrollWrap, readingProgress, cursorGlow;
 
-  const btnReadBook    = document.getElementById('btn-read-book');
-  const langCards       = document.querySelectorAll('.lang-card');
-  const btnChangeLang  = document.getElementById('btn-change-lang');
-  const chapterListEl  = document.getElementById('chapter-list');
-  const chaptersTitleEl = document.getElementById('chapters-title');
-  const chaptersSubtitleEl = document.getElementById('chapters-subtitle');
-
-  const btnBackChapters = document.getElementById('btn-back-chapters');
-  const langDropdown    = document.getElementById('lang-dropdown');
-  const readerLabel     = document.getElementById('reader-chapter-label');
-  const readerTitle     = document.getElementById('reader-title');
-  const readerText      = document.getElementById('reader-text');
-  const btnPrevChapter  = document.getElementById('btn-prev-chapter');
-  const btnNextChapter  = document.getElementById('btn-next-chapter');
+  function cacheDom() {
+    screens = {
+      landing:  document.getElementById('screen-landing'),
+      language: document.getElementById('screen-language'),
+      chapters: document.getElementById('screen-chapters'),
+      reader:   document.getElementById('screen-reader')
+    };
+    btnReadBook       = document.getElementById('btn-read-book');
+    langCards         = document.querySelectorAll('.lang-card');
+    btnChangeLang     = document.getElementById('btn-change-lang');
+    chapterListEl     = document.getElementById('chapter-list');
+    chaptersTitleEl   = document.getElementById('chapters-title');
+    chaptersSubtitleEl = document.getElementById('chapters-subtitle');
+    btnBackChapters   = document.getElementById('btn-back-chapters');
+    langDropdown      = document.getElementById('lang-dropdown');
+    readerLabel       = document.getElementById('reader-chapter-label');
+    readerTitle       = document.getElementById('reader-title');
+    readerText        = document.getElementById('reader-text');
+    btnPrevChapter    = document.getElementById('btn-prev-chapter');
+    btnNextChapter    = document.getElementById('btn-next-chapter');
+    readerScrollWrap  = document.getElementById('reader-scroll-wrap');
+    readingProgress   = document.getElementById('reading-progress');
+    cursorGlow        = document.getElementById('cursor-glow');
+  }
 
   /* ---------------- SCREEN NAVIGATION ---------------- */
   function goToScreen(name) {
     Object.values(screens).forEach(s => s.classList.remove('active'));
     screens[name].classList.add('active');
     currentScreen = name;
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    // Progress bar — only visible in reader
+    if (name === 'reader') {
+      readingProgress.classList.add('visible');
+    } else {
+      readingProgress.classList.remove('visible');
+      readingProgress.style.width = '0%';
+    }
+
+    // Scroll the non-reader screens back to top
+    if (name !== 'reader') {
+      screens[name].scrollTop = 0;
+    }
   }
 
   /* ---------------- LANGUAGE HANDLING ---------------- */
   function setLanguage(lang) {
     currentLanguage = lang;
-    localStorage.setItem('lang', lang);
+    try { localStorage.setItem('lang', lang); } catch(e) {}
     langDropdown.value = lang;
+
+    // Highlight selected lang card
+    langCards.forEach(c => {
+      c.classList.toggle('selected', c.getAttribute('data-lang') === lang);
+    });
   }
 
   function applyChaptersUI() {
     const t = UI[currentLanguage];
     chaptersTitleEl.textContent = t.chaptersTitle;
     chaptersSubtitleEl.textContent = t.chaptersSubtitle;
-    btnChangeLang.querySelector('span') ? null : (btnChangeLang.textContent = t.changeLang);
+    // FIX: safely update the span inside btnChangeLang
+    const spanEl = btnChangeLang.querySelector('span');
+    if (spanEl) spanEl.textContent = t.changeLang;
+    else btnChangeLang.textContent = t.changeLang;
   }
 
   function applyReaderUI() {
     const t = UI[currentLanguage];
-    btnBackChapters.querySelector('span').textContent = t.back;
+    const backSpan = btnBackChapters.querySelector('span');
+    if (backSpan) backSpan.textContent = t.back;
     btnPrevChapter.textContent = t.prev;
     btnNextChapter.textContent = t.next;
   }
 
-  /* ---------------- RENDER CHAPTER LIST ---------------- */
+  /* ---------------- RENDER CHAPTER LIST (staggered) ---------------- */
   function renderChapterList() {
     applyChaptersUI();
     const list = CHAPTERS[currentLanguage];
@@ -156,14 +181,16 @@
 
     list.forEach((ch, index) => {
       const card = document.createElement('button');
-      card.className = 'chapter-card';
+      card.className = 'chapter-card card-reveal';
+      card.style.animationDelay = `${index * 0.07}s`;
       card.innerHTML = `
-        <span class="chapter-num">Chapter ${index + 1}</span>
+        <span class="chapter-num">Chapter ${String(index + 1).padStart(2, '0')}</span>
         <span class="chapter-name">${ch.title}</span>
         <span class="chapter-excerpt">${ch.excerpt}</span>
         <span class="chapter-arrow">Read →</span>
       `;
       card.addEventListener('click', () => openChapter(index));
+      addRipple(card);
       chapterListEl.appendChild(card);
     });
   }
@@ -173,89 +200,168 @@
     currentChapterIndex = index;
     renderReader();
     goToScreen('reader');
+    readerScrollWrap.scrollTop = 0;
   }
 
   function renderReader() {
     applyReaderUI();
     const ch = CHAPTERS[currentLanguage][currentChapterIndex];
+    const total = CHAPTERS[currentLanguage].length;
 
-    readerLabel.textContent = `Chapter ${currentChapterIndex + 1} / ${CHAPTERS[currentLanguage].length}`;
+    readerLabel.textContent = `Chapter ${currentChapterIndex + 1} / ${total}`;
     readerTitle.textContent = ch.title;
+
+    // Force re-trigger paragraph animations by replacing content
     readerText.innerHTML = ch.text.map(p => `<p>${p}</p>`).join('');
 
-    btnPrevChapter.disabled = currentChapterIndex === 0;
-    btnNextChapter.disabled = currentChapterIndex === CHAPTERS[currentLanguage].length - 1;
-    btnPrevChapter.style.opacity = btnPrevChapter.disabled ? 0.35 : 1;
-    btnNextChapter.style.opacity = btnNextChapter.disabled ? 0.35 : 1;
-    btnPrevChapter.style.pointerEvents = btnPrevChapter.disabled ? 'none' : 'auto';
-    btnNextChapter.style.pointerEvents = btnNextChapter.disabled ? 'none' : 'auto';
+    // Trigger divider re-animation
+    const divider = document.querySelector('.reader-divider');
+    if (divider) {
+      divider.style.animation = 'none';
+      divider.offsetHeight; // reflow
+      divider.style.animation = '';
+    }
+
+    const isFirst = currentChapterIndex === 0;
+    const isLast  = currentChapterIndex === total - 1;
+
+    btnPrevChapter.disabled = isFirst;
+    btnNextChapter.disabled = isLast;
+    btnPrevChapter.style.opacity = isFirst ? '0.35' : '1';
+    btnNextChapter.style.opacity = isLast  ? '0.35' : '1';
+    btnPrevChapter.style.pointerEvents = isFirst ? 'none' : 'auto';
+    btnNextChapter.style.pointerEvents = isLast  ? 'none' : 'auto';
+  }
+
+  /* ---------------- READING PROGRESS BAR ---------------- */
+  function updateProgress() {
+    if (currentScreen !== 'reader') return;
+    const el = readerScrollWrap;
+    const scrollable = el.scrollHeight - el.clientHeight;
+    if (scrollable <= 0) { readingProgress.style.width = '100%'; return; }
+    const pct = Math.min((el.scrollTop / scrollable) * 100, 100);
+    readingProgress.style.width = pct + '%';
+  }
+
+  /* ---------------- RIPPLE EFFECT ---------------- */
+  function addRipple(btn) {
+    btn.addEventListener('click', function(e) {
+      const rect = btn.getBoundingClientRect();
+      const size = Math.max(rect.width, rect.height) * 1.5;
+      const x = e.clientX - rect.left - size / 2;
+      const y = e.clientY - rect.top  - size / 2;
+      const ripple = document.createElement('span');
+      ripple.className = 'btn-ripple';
+      ripple.style.cssText = `width:${size}px;height:${size}px;left:${x}px;top:${y}px`;
+      btn.appendChild(ripple);
+      ripple.addEventListener('animationend', () => ripple.remove());
+    });
+  }
+
+  /* ---------------- CURSOR GLOW (desktop only) ---------------- */
+  function initCursorGlow() {
+    if (window.matchMedia('(pointer: coarse)').matches) {
+      cursorGlow.style.display = 'none';
+      return;
+    }
+    document.addEventListener('mousemove', e => {
+      cursorGlow.style.left = e.clientX + 'px';
+      cursorGlow.style.top  = e.clientY + 'px';
+    });
   }
 
   /* ---------------- EVENT LISTENERS ---------------- */
+  function bindEvents() {
+    // Ripple on primary buttons
+    addRipple(btnReadBook);
+    addRipple(btnChangeLang);
+    addRipple(btnBackChapters);
+    addRipple(btnPrevChapter);
+    addRipple(btnNextChapter);
 
-  // Landing → Language (or straight to Chapters if lang already saved)
-  btnReadBook.addEventListener('click', () => {
-    if (currentLanguage) {
-      renderChapterList();
-      goToScreen('chapters');
-    } else {
-      goToScreen('language');
-    }
-  });
+    // Landing → Language or Chapters
+    btnReadBook.addEventListener('click', () => {
+      if (currentLanguage) {
+        renderChapterList();
+        goToScreen('chapters');
+      } else {
+        goToScreen('language');
+      }
+    });
 
-  // Language card selection
-  langCards.forEach(card => {
-    card.addEventListener('click', () => {
-      const lang = card.getAttribute('data-lang');
-      setLanguage(lang);
+    // Language card selection
+    langCards.forEach(card => {
+      card.addEventListener('click', () => {
+        const lang = card.getAttribute('data-lang');
+        setLanguage(lang);
+        renderChapterList();
+        goToScreen('chapters');
+      });
+    });
+
+    // Change language (from chapters)
+    btnChangeLang.addEventListener('click', () => goToScreen('language'));
+
+    // Back to chapters (from reader)
+    btnBackChapters.addEventListener('click', () => {
       renderChapterList();
       goToScreen('chapters');
     });
-  });
 
-  // Change language button (from chapters screen)
-  btnChangeLang.addEventListener('click', () => {
-    goToScreen('language');
-  });
-
-  // Back to chapters (from reader)
-  btnBackChapters.addEventListener('click', () => {
-    renderChapterList();
-    goToScreen('chapters');
-  });
-
-  // Floating language dropdown inside reader
-  langDropdown.addEventListener('change', (e) => {
-    setLanguage(e.target.value);
-    renderReader(); // re-render same chapter index in new language
-  });
-
-  // Prev / Next chapter navigation
-  btnPrevChapter.addEventListener('click', () => {
-    if (currentChapterIndex > 0) {
-      currentChapterIndex--;
+    // Floating language dropdown inside reader
+    langDropdown.addEventListener('change', e => {
+      setLanguage(e.target.value);
       renderReader();
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-  });
+      readerScrollWrap.scrollTop = 0;
+    });
 
-  btnNextChapter.addEventListener('click', () => {
-    if (currentChapterIndex < CHAPTERS[currentLanguage].length - 1) {
-      currentChapterIndex++;
-      renderReader();
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-  });
+    // Prev / Next chapter
+    btnPrevChapter.addEventListener('click', () => {
+      if (currentChapterIndex > 0) {
+        currentChapterIndex--;
+        renderReader();
+        readerScrollWrap.scrollTop = 0;
+      }
+    });
 
-  /* ---------------- INIT ---------------- */
+    btnNextChapter.addEventListener('click', () => {
+      if (currentChapterIndex < CHAPTERS[currentLanguage].length - 1) {
+        currentChapterIndex++;
+        renderReader();
+        readerScrollWrap.scrollTop = 0;
+      }
+    });
+
+    // Reading progress on reader scroll
+    readerScrollWrap.addEventListener('scroll', updateProgress, { passive: true });
+  }
+
+  /* ---------------- INIT — runs after DOM is ready ---------------- */
   function init() {
-    if (currentLanguage) {
+    cacheDom();
+
+    // Restore saved language (FIX: set default before first render)
+    let saved = null;
+    try { saved = localStorage.getItem('lang'); } catch(e) {}
+    currentLanguage = saved || 'hinglish';
+
+    if (saved) {
       langDropdown.value = currentLanguage;
-    } else {
-      currentLanguage = 'hinglish'; // sensible default, not yet saved
+      langCards.forEach(c => {
+        c.classList.toggle('selected', c.getAttribute('data-lang') === currentLanguage);
+      });
     }
+
+    bindEvents();
+    initCursorGlow();
     goToScreen('landing');
   }
 
-  document.addEventListener('DOMContentLoaded', init);
+  // FIX: Run init directly — DOM is already parsed when script is at bottom of body
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
 })();
